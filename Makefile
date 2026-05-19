@@ -2,12 +2,10 @@ CC ?= cc
 CPPFLAGS ?= -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE
 CFLAGS ?= -std=c99 -O2 -Wall -Wextra
 
-RAFT_C_ROOT ?= /Users/josem/src/consulting/raft_rx/c
-RXNET_C_ROOT ?= /Users/josem/src/consulting/rxnet/c
+RAFT_C_ROOT ?= /opt/homebrew
 
-INCLUDES := -Iinclude -I$(RAFT_C_ROOT)/include -I$(RXNET_C_ROOT)/include
-RAFT_LIB := $(RAFT_C_ROOT)/build/libraft_rx.a
-RXNET_LIB := $(RXNET_C_ROOT)/build/librxnet.a
+INCLUDES := -Iinclude -I$(RAFT_C_ROOT)/include 
+LIBS := -L$(RAFT_C_ROOT)/lib -lraft_rx -lrxnet
 
 BUILD := build
 TARGET := $(BUILD)/rps_node
@@ -22,17 +20,11 @@ all: $(TARGET)
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(RAFT_LIB):
-	$(MAKE) -C $(RAFT_C_ROOT) build/libraft_rx.a
+$(TARGET): $(BUILD) $(CORE_SRC) $(NODE_SRC)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(INCLUDES) -o $@ $(CORE_SRC) $(NODE_SRC) $(LIBS) -lpthread
 
-$(RXNET_LIB):
-	$(MAKE) -C $(RXNET_C_ROOT) build/librxnet.a
-
-$(TARGET): $(BUILD) $(CORE_SRC) $(NODE_SRC) $(RAFT_LIB) $(RXNET_LIB)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(INCLUDES) -o $@ $(CORE_SRC) $(NODE_SRC) $(RAFT_LIB) $(RXNET_LIB) -lpthread
-
-$(BUILD)/test_%: tests/test_%.c $(CORE_SRC) $(RAFT_LIB) $(RXNET_LIB) | $(BUILD)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(INCLUDES) -o $@ $< $(CORE_SRC) $(RAFT_LIB) $(RXNET_LIB) -lpthread
+$(BUILD)/test_%: tests/test_%.c $(CORE_SRC) | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(INCLUDES) -o $@ $< $(CORE_SRC) $(LIBS) -lpthread
 
 test: $(TEST_BINS)
 	@for t in $(TEST_BINS); do echo $$t; $$t; done
