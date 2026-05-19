@@ -10,9 +10,9 @@ LIBS := -L$(RAFT_C_ROOT)/lib -lraft_rx -lrxnet
 BUILD := build
 TARGET := $(BUILD)/rps_node
 
-CORE_SRC := src/rps_game.c src/rps_command.c src/rps_app.c
+CORE_SRC := src/rps_game.c src/rps_command.c src/rps_app.c src/sha256.c
 NODE_SRC := src/main.c src/rps_args.c src/rps_cli.c
-TEST_SRC := tests/test_hash_command.c tests/test_game.c tests/test_app.c
+TEST_SRC := tests/test_sha256.c tests/test_hash_command.c tests/test_game.c tests/test_app.c
 TEST_BINS := $(TEST_SRC:tests/%.c=$(BUILD)/%)
 
 all: $(TARGET)
