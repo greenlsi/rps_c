@@ -31,3 +31,4 @@ typedef struct {
 
 void rps_cli_machine_init(rx_fsm_machine *machine, rps_cli_t *cli);
 void rps_cli_print_help(void);
+void rps_cli_print_status(const rps_cli_t *cli);

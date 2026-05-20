@@ -1,3 +1,4 @@
 build/
 var/
 .DS_Store
+mermaid-filter.err

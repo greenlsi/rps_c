@@ -21,6 +21,13 @@ static int member_contains(const char members[][RAFT_MAX_ID], size_t count, cons
     return 0;
 }
 
+static int peer_known(const rps_cli_t *cli, const char *id) {
+    size_t i;
+    for (i = 0; i < cli->tcp->peer_count; ++i)
+        if (strcmp(cli->tcp->peers[i].id, id) == 0) return 1;
+    return 0;
+}
+
 static int find_peer_address(const rps_cli_t *cli, const char *id, char *host, int *port) {
     size_t i;
     if (strcmp(id, cli->node->config.node_id) == 0) {
@@ -39,6 +46,18 @@ static int find_peer_address(const rps_cli_t *cli, const char *id, char *host, i
         }
     }
     return -1;
+}
+
+static int parse_host_port(const char *arg, char *host, size_t hostsz, int *port) {
+    const char *colon = strrchr(arg, ':');
+    size_t hlen;
+    if (!colon) return -1;
+    hlen = (size_t)(colon - arg);
+    if (hlen == 0 || hlen >= hostsz) return -1;
+    strncpy(host, arg, hlen);
+    host[hlen] = '\0';
+    *port = atoi(colon + 1);
+    return *port > 0 ? 0 : -1;
 }
 
 static int find_leader_address(const rps_cli_t *cli, char *host, int *port) {
@@ -64,6 +83,7 @@ static int forward_to_leader(rps_cli_t *cli, const raft_command_t *cmd) {
 static int submit_command(rps_cli_t *cli, rps_operation_t *op) {
     raft_command_t cmd;
     cli->sequence++;
+    snprintf(op->operation_id, sizeof(op->operation_id), "%s-%08d", cli->node_id, cli->sequence);
     if (rps_command_encode(op, cli->sequence, &cmd) != 0) return -1;
     if (cli->node->machine.state == RAFT_ROLE_LEADER) {
         if (raft_node_submit_command(cli->node, &cmd) == 0) {
@@ -84,32 +104,96 @@ static void print_scores(const rps_game_t *game) {
     puts(game->player_count ? "" : " (empty)");
 }
 
-static void cmd_status(const rps_cli_t *cli) {
-    const raft_node_t *n = cli->node;
-    const rps_game_t *g = &cli->app->game;
+static void print_status_scores(const rps_game_t *game) {
     size_t i;
-    printf("id=%s player=%s running=%s role=%s term=%d leader=%s commit=%d applied=%d log=%zu\n",
-           n->config.node_id, cli->player_id, n->running ? "yes" : "no",
-           role_name(n->machine.state), n->current_term,
-           n->leader_id[0] ? n->leader_id : "unknown", n->commit_index,
-           n->last_applied, n->log_count);
-    printf("members old=[");
-    for (i = 0; i < n->config_state.old_count; ++i)
-        printf("%s%s", n->config_state.old_members[i], i + 1 < n->config_state.old_count ? "," : "");
-    printf("] new=[");
-    for (i = 0; i < n->config_state.new_count; ++i)
-        printf("%s%s", n->config_state.new_members[i], i + 1 < n->config_state.new_count ? "," : "");
-    puts("]");
-    printf("peers:");
+    printf("  score:");
+    for (i = 0; i < game->player_count; ++i)
+        printf(" %s=%d", game->players[i], game->scores[i]);
+    puts(game->player_count ? "" : " (empty)");
+}
+
+static void print_member_list(const char members[][RAFT_MAX_ID], size_t count) {
+    size_t i;
+    putchar('[');
+    for (i = 0; i < count; ++i)
+        printf("%s%s", members[i], i + 1 < count ? "," : "");
+    putchar(']');
+}
+
+static void print_peers(const rps_cli_t *cli) {
+    size_t i;
+    printf("  peers:");
     for (i = 0; i < cli->tcp->peer_count; ++i)
         printf(" %s=%s:%d", cli->tcp->peers[i].id, cli->tcp->peers[i].host, cli->tcp->peers[i].port);
     puts(cli->tcp->peer_count ? "" : " (none)");
-    printf("game=%s round=%d players=%zu commits=%zu reveals=%zu winner=%s\n",
-           rps_state_name(rps_game_state(g)), g->round_number, g->player_count,
+}
+
+static void print_replication_status(const rps_cli_t *cli) {
+    const raft_node_t *n = cli->node;
+    int last_log_index = n->snapshot_last_included_index + (int)n->log_count;
+    size_t i;
+
+    puts("replication:");
+    if (n->machine.state != RAFT_ROLE_LEADER) {
+        puts("  only available on leader");
+        return;
+    }
+    if (n->config.peer_count == 0) {
+        puts("  no configured peers");
+        return;
+    }
+    for (i = 0; i < n->config.peer_count; ++i) {
+        int match = n->match_index[i];
+        int next = n->next_index[i];
+        int lag = last_log_index - match;
+        if (lag < 0) lag = 0;
+        printf("  %s match=%d next=%d lag=%d %s\n",
+               n->config.peers[i], match, next, lag,
+               lag == 0 ? "caught-up" : "behind");
+    }
+}
+
+void rps_cli_print_status(const rps_cli_t *cli) {
+    const raft_node_t *n = cli->node;
+    const rps_game_t *g = &cli->app->game;
+
+    puts("app:");
+    printf("  node=%s player=%s game=%s round=%d\n",
+           n->config.node_id, cli->player_id, rps_state_name(rps_game_state(g)), g->round_number);
+    printf("  players=%zu commits=%zu reveals=%zu winner=%s\n",
+           g->player_count,
            g->commit_count, g->reveal_count, g->winner[0] ? g->winner : "none");
-    print_scores(g);
-    if (g->last_announcement[0]) printf("last: %s\n", g->last_announcement);
-    if (g->last_error[0]) printf("error: %s\n", g->last_error);
+    print_status_scores(g);
+    if (g->last_announcement[0]) printf("  last: %s\n", g->last_announcement);
+    if (g->last_error[0]) printf("  error: %s\n", g->last_error);
+
+    puts("");
+    puts("raft:");
+    printf("  running=%s role=%s term=%d leader=%s\n",
+           n->running ? "yes" : "no", role_name(n->machine.state), n->current_term,
+           n->leader_id[0] ? n->leader_id : "unknown");
+    printf("  log=%zu commit=%d applied=%d snapshot=%d\n",
+           n->log_count, n->commit_index, n->last_applied, n->snapshot_last_included_index);
+    printf("  config ");
+    if (n->config_state.new_count) {
+        printf("old=");
+        print_member_list(n->config_state.old_members, n->config_state.old_count);
+        printf(" new=");
+        print_member_list(n->config_state.new_members, n->config_state.new_count);
+        puts("");
+    } else {
+        printf("stable=");
+        print_member_list(n->config_state.old_members, n->config_state.old_count);
+        puts("");
+    }
+    print_peers(cli);
+
+    puts("");
+    print_replication_status(cli);
+}
+
+static void cmd_status(const rps_cli_t *cli) {
+    rps_cli_print_status(cli);
 }
 
 static void cmd_log(const rps_cli_t *cli) {
@@ -177,10 +261,45 @@ static void cmd_reveal(rps_cli_t *cli, char **tok, int n) {
     submit_command(cli, &op);
 }
 
+static void cmd_player_join(rps_cli_t *cli, const char *player_id) {
+    rps_operation_t op;
+    memset(&op, 0, sizeof(op));
+    op.kind = RPS_OP_PLAYER_JOINED;
+    strncpy(op.player_id, player_id, sizeof(op.player_id) - 1);
+    submit_command(cli, &op);
+}
+
+static void cmd_cluster_join(rps_cli_t *cli, const char *addr) {
+    char host[256];
+    int port;
+    if (parse_host_port(addr, host, sizeof(host), &port) != 0) {
+        puts("usage: join HOST:PORT");
+        return;
+    }
+    if (!raft_tcp_transport_is_listening(cli->tcp)) {
+        puts("join requires --port");
+        return;
+    }
+    raft_node_reset_for_join(cli->node);
+    if (cli->node->application.reload)
+        cli->node->application.reload(cli->node->application.user);
+    if (raft_tcp_transport_request_join(cli->tcp,
+                                        cli->node->config.node_id,
+                                        cli->tcp->own_host,
+                                        cli->tcp->listen_port,
+                                        host, port) != 0) {
+        puts("join failed");
+        return;
+    }
+    puts("join requested");
+}
+
 void rps_cli_print_help(void) {
     puts("Commands:");
     puts("  status");
-    puts("  join PLAYER");
+    puts("  join HOST:PORT");
+    puts("  player PLAYER");
+    puts("  join PLAYER    (compat: add player)");
     puts("  confirm");
     puts("  config [target_score] [max_rounds] [commit_timeout] [reveal_timeout]");
     puts("  start");
@@ -205,8 +324,12 @@ static void dispatch(rps_cli_t *cli, char *line) {
 
     if (strcmp(tok[0], "status") == 0) cmd_status(cli);
     else if (strcmp(tok[0], "join") == 0) {
-        if (n < 2) puts("usage: join PLAYER");
-        else { op.kind = RPS_OP_PLAYER_JOINED; strncpy(op.player_id, tok[1], sizeof(op.player_id) - 1); submit_command(cli, &op); }
+        if (n < 2) puts("usage: join HOST:PORT | PLAYER");
+        else if (strchr(tok[1], ':')) cmd_cluster_join(cli, tok[1]);
+        else cmd_player_join(cli, tok[1]);
+    } else if (strcmp(tok[0], "player") == 0) {
+        if (n < 2) puts("usage: player PLAYER");
+        else cmd_player_join(cli, tok[1]);
     } else if (strcmp(tok[0], "confirm") == 0) {
         op.kind = RPS_OP_CONFIRM_PLAYERS; submit_command(cli, &op);
     } else if (strcmp(tok[0], "config") == 0) cmd_config(cli, tok, n);
@@ -225,6 +348,8 @@ static void cli_latch(rx_fsm_context *ctx, void *user) {
     rps_cli_t *cli = (rps_cli_t *)user;
     fd_set rfds;
     struct timeval tv = {0, 0};
+    raft_tcp_join_req_t incoming[RAFT_MAX_NODES];
+    size_t join_count, i, j;
     (void)ctx;
     cli->has_line = 0;
     FD_ZERO(&rfds);
@@ -235,8 +360,18 @@ static void cli_latch(rx_fsm_context *ctx, void *user) {
     }
     cli->fwd_cmd_count += raft_tcp_transport_recv_fwd_cmds(
         cli->tcp, cli->fwd_cmds + cli->fwd_cmd_count, RAFT_MAX_QUEUE - cli->fwd_cmd_count);
-    cli->pending_join_count += raft_tcp_transport_recv_joins(
-        cli->tcp, cli->pending_joins + cli->pending_join_count, RAFT_MAX_NODES - cli->pending_join_count);
+    join_count = raft_tcp_transport_recv_joins(cli->tcp, incoming, RAFT_MAX_NODES);
+    for (i = 0; i < join_count && cli->pending_join_count < RAFT_MAX_NODES; ++i) {
+        int dup = 0;
+        for (j = 0; j < cli->pending_join_count; ++j) {
+            if (strcmp(cli->pending_joins[j].node_id, incoming[i].node_id) == 0 &&
+                cli->pending_joins[j].forwarded == incoming[i].forwarded) {
+                dup = 1;
+                break;
+            }
+        }
+        if (!dup) cli->pending_joins[cli->pending_join_count++] = incoming[i];
+    }
 }
 
 static int guard_line(const rx_fsm_context *ctx, void *user) {
@@ -265,13 +400,41 @@ static void process_joins(rps_cli_t *cli) {
     size_t i = 0, j;
     while (i < cli->pending_join_count) {
         raft_tcp_join_req_t *jr = &cli->pending_joins[i];
-        raft_tcp_transport_add_peer(cli->tcp, jr->node_id, jr->host, jr->port);
+
+        if (jr->forwarded == RAFT_JOIN_ANNOUNCE) {
+            if (!peer_known(cli, jr->node_id))
+                raft_tcp_transport_add_peer(cli->tcp, jr->node_id, jr->host, jr->port);
+            for (j = i + 1; j < cli->pending_join_count; ++j) cli->pending_joins[j - 1] = cli->pending_joins[j];
+            cli->pending_join_count--;
+            continue;
+        }
+
         if (jr->forwarded == RAFT_JOIN_ORIGINAL) {
+            jr->forwarded = RAFT_JOIN_FORWARDED;
             raft_tcp_transport_flood_join(cli->tcp, jr);
             raft_tcp_transport_announce_self(cli->tcp, jr->host, jr->port);
+            jr->forwarded = RAFT_JOIN_PENDING;
         } else if (jr->forwarded == RAFT_JOIN_FORWARDED) {
             raft_tcp_transport_announce_self(cli->tcp, jr->host, jr->port);
+            jr->forwarded = RAFT_JOIN_PENDING;
         }
+
+        if (!peer_known(cli, jr->node_id))
+            raft_tcp_transport_add_peer(cli->tcp, jr->node_id, jr->host, jr->port);
+
+        {
+            int already = 0;
+            for (j = 0; j < cli->node->config_state.old_count && !already; ++j)
+                if (strcmp(cli->node->config_state.old_members[j], jr->node_id) == 0) already = 1;
+            for (j = 0; j < cli->node->config_state.new_count && !already; ++j)
+                if (strcmp(cli->node->config_state.new_members[j], jr->node_id) == 0) already = 1;
+            if (already) {
+                for (j = i + 1; j < cli->pending_join_count; ++j) cli->pending_joins[j - 1] = cli->pending_joins[j];
+                cli->pending_join_count--;
+                continue;
+            }
+        }
+
         if (cli->node->machine.state == RAFT_ROLE_LEADER) {
             char members[RAFT_MAX_NODES][RAFT_MAX_ID];
             size_t count = collect_members(cli, members);

@@ -20,9 +20,14 @@ int main(void) {
     ASSERT_STREQ("rps.configure", cmd.op);
     ASSERT_STREQ("00000007", cmd.key);
 
+    strncpy(op.operation_id, "n2-00000007", sizeof(op.operation_id) - 1);
+    ASSERT_EQ_INT(0, rps_command_encode(&op, 7, &cmd));
+    ASSERT_STREQ("n2-00000007", cmd.key);
+
     memset(&op, 0, sizeof(op));
     ASSERT_EQ_INT(0, rps_command_decode(&cmd, &op));
     ASSERT_EQ_INT(RPS_OP_CONFIGURE, op.kind);
+    ASSERT_STREQ("n2-00000007", op.operation_id);
     ASSERT_EQ_INT(1, op.config.target_score);
     ASSERT_EQ_INT(9, op.config.max_rounds);
     ASSERT_EQ_INT(-1, op.config.commit_timeout_ticks);

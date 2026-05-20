@@ -52,7 +52,9 @@ Terminal 3:
 
 ```text
 status
-join PLAYER
+join HOST:PORT
+player PLAYER
+join PLAYER    (compat: add player)
 confirm
 config [target_score] [max_rounds] [commit_timeout] [reveal_timeout]
 start
@@ -67,3 +69,6 @@ quit
 No hay operación Raft `tick`: el log contiene decisiones de juego. Cada nodo
 avanza localmente las transiciones automáticas de su FSM después de aplicar
 operaciones comprometidas.
+
+Para unir un nodo ya arrancado a otro clúster, usa `join HOST:PORT` en la CLI
+del nodo que entra. Para añadir un jugador a la partida, usa `player PLAYER`.

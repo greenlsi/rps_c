@@ -32,7 +32,10 @@ int rps_command_encode(const rps_operation_t *operation, int sequence, raft_comm
     const char *name = rps_operation_name(operation->kind);
     memset(command, 0, sizeof(*command));
     snprintf(command->op, sizeof(command->op), "rps.%s", name);
-    snprintf(command->key, sizeof(command->key), "%08d", sequence);
+    if (operation->operation_id[0])
+        snprintf(command->key, sizeof(command->key), "%s", operation->operation_id);
+    else
+        snprintf(command->key, sizeof(command->key), "%08d", sequence);
     switch (operation->kind) {
         case RPS_OP_PLAYER_JOINED:
             snprintf(command->value, sizeof(command->value), "%s", operation->player_id);
@@ -69,6 +72,7 @@ int rps_command_decode(const raft_command_t *command, rps_operation_t *operation
     memset(operation, 0, sizeof(*operation));
     if (strncmp(command->op, "rps.", 4) != 0) return -1;
     operation->kind = kind_from_name(command->op + 4);
+    strncpy(operation->operation_id, command->key, sizeof(operation->operation_id) - 1);
     strncpy(value, command->value, sizeof(value) - 1);
     switch (operation->kind) {
         case RPS_OP_PLAYER_JOINED:
